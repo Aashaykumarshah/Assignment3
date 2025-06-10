@@ -1,72 +1,95 @@
 
-#!usr/bin/env python3
+#!/usr/bin/env python3
 import sys
 import math
 
 INF = math.inf
 
 def parse_input():
-    nodes, edges, updates = [], [], []
-    try:
-        while True:
-            line = input().strip()
-            if line == "START":
-                break
-            if line:
-                nodes.append(line)
+    nodes = []
+    for line in sys.stdin:
+        tok = line.strip()
+        if not tok: continue
+        if tok == "START":
+            break
+        nodes.append(tok)
 
-        while True:
-            line = input().strip()
-            if line == "UPDATE":
-                break
-            if line:
-                u, v, w = line.split()
-                edges.append((u, v, int(w)))
+    edges = []
+    for line in sys.stdin:
+        tok = line.strip()
+        if not tok: continue
+        if tok == "UPDATE":
+            break
+        u, v, w = tok.split()
+        edges.append((u, v, int(w)))
 
-        while True:
-            line = input().strip()
-            if line == "END":
-                break
-            if line:
-                u, v, w = line.split()
-                updates.append((u, v, int(w)))
-
-    except EOFError:
-        pass
+    updates = []
+    for line in sys.stdin:
+        tok = line.strip()
+        if not tok: continue
+        if tok == "END":
+            break
+        u, v, w = tok.split()
+        updates.append((u, v, int(w)))
 
     return nodes, edges, updates
 
-def run_dv(nodes, edges, start_time):
-    graph = {n: {} for n in nodes}
-    for u, v, w in edges:
-        graph.setdefault(u, {})[v] = w
-        graph.setdefault(v, {})[u] = w
+def run_dv(nodes, edges, start_time, dt=None, graph=None):
+    if graph is None:
+        graph = {n: {} for n in nodes}
+        for u, v, w in edges:
+            graph[u][v] = w
+            graph[v][u] = w
 
-    dt = {}
-    for x in nodes:
-        dt[x] = {}
-        for dest in nodes:
-            if dest == x:
-                continue
-            dt[x][dest] = { via: INF for via in nodes if via != x }
-        for nbr, w in graph[x].items():
-            if nbr in dt[x]:
-                dt[x][nbr][nbr] = w
+    
+    if dt is None:
+        dt = {}
+        for x in nodes:
+            dt[x] = {}
+            for dest in nodes:
+                if dest == x:
+                    continue
+                dt[x][dest] = {}
+                for via in nodes:
+                    if via != x:
+                        dt[x][dest][via] = INF
+            for nbr, cost in graph[x].items():
+                if nbr in dt[x]:
+                    dt[x][nbr][nbr] = cost
 
     t = start_time
     print_distance_tables(nodes, dt, t)
     t += 1
 
     while True:
-        adv = {src: {dst: (0 if src == dst else min(dt[src][dst].values())) for dst in nodes} for src in nodes}
-        updated = False
+        dv = {}
+        for n in nodes:
+            dv[n] = {}
+            for dest in nodes:
+                if dest == n:
+                    dv[n][dest] = 0
+                elif dest in dt[n]:
+                    min_cost = INF
+                    min_via = None
+                    for via in sorted(dt[n][dest].keys()):
+                        cost = dt[n][dest][via]
+                        if cost < min_cost or (cost == min_cost and (min_via is None or via < min_via)):
+                            min_cost = cost
+                            min_via = via
+                    dv[n][dest] = min_cost
 
+        updated = False
         for x in nodes:
-            for src, cost_x_src in graph[x].items():
-                for dest in dt[x]:
-                    nc = cost_x_src + adv[src][dest]
-                    if nc < dt[x][dest][src]:
-                        dt[x][dest][src] = nc
+            for dest in dt[x]:
+                for via in dt[x][dest]:
+                    if via in graph[x]:
+                        cost_to_via = graph[x][via]
+                        cost_via_to_dest = dv[via][dest]
+                        new_cost = cost_to_via + cost_via_to_dest
+                    else:
+                        new_cost = INF
+                    if dt[x][dest][via] != new_cost:
+                        dt[x][dest][via] = new_cost
                         updated = True
 
         if not updated:
@@ -76,19 +99,19 @@ def run_dv(nodes, edges, start_time):
         t += 1
 
     print_routing_tables(nodes, dt)
-    return t
+    return t, dt, graph
 
 def print_distance_tables(nodes, dt, t):
     for x in sorted(nodes):
         print(f"Distance Table of router {x} at t={t}:")
         others = [n for n in sorted(nodes) if n != x]
-        print("     " + "    ".join(others))
+        print("   " + " ".join(others))
         for dest in others:
-            row = [f"{dest: <5}"]
+            row = [dest]
             for via in others:
-                cost = dt[x][dest][via]
-                row.append(f"{int(cost): <5}" if cost != INF else "INF  ")
-            print("     " + " ".join(row))
+                c = dt[x][dest][via]
+                row.append(str(int(c)) if c != INF else "INF")
+            print("   " + " ".join(row))
         print()
 
 def print_routing_tables(nodes, dt):
@@ -97,46 +120,180 @@ def print_routing_tables(nodes, dt):
         for dest in sorted(nodes):
             if dest == x:
                 continue
-            via, cost = min(dt[x][dest].items(), key=lambda kv: kv[1])
+            
+            via, cost = min(dt[x][dest].items(), key=lambda kv: (kv[1], kv[0]))
             if cost == INF:
                 print(f"{dest},INF,INF")
             else:
                 print(f"{dest},{via},{int(cost)}")
         print()
 
-def main():
-    t = 0
-    nodes_seen = set()
-    edges = []
+def single_dv_update(nodes, dt, graph, t):
+    dv = {}
+    for n in nodes:
+        dv[n] = {}
+        for dest in nodes:
+            if dest == n:
+                dv[n][dest] = 0
+            elif dest in dt[n]:
+                min_cost = INF
+                min_via = None
+                for via in sorted(dt[n][dest].keys()):
+                    cost = dt[n][dest][via]
+                    if cost < min_cost or (cost == min_cost and (min_via is None or via < min_via)):
+                        min_cost = cost
+                        min_via = via
+                dv[n][dest] = min_cost
 
+    updated = False
+    for x in nodes:
+        for dest in dt[x]:
+            for via in dt[x][dest]:
+                if via in graph[x]:
+                    cost_to_via = graph[x][via]
+                    cost_via_to_dest = dv[via][dest]
+                    new_cost = cost_to_via + cost_via_to_dest
+                else:
+                    new_cost = INF
+                if dt[x][dest][via] != new_cost:
+                    dt[x][dest][via] = new_cost
+                    updated = True
+    print_distance_tables(nodes, dt, t)
+    return updated
+
+def global_dv_update(nodes, dt, graph, t):
     while True:
-        try:
-            nodes, new_edges, updates = parse_input()
-        except EOFError:
-            break
-
-        if not nodes:
-            break
-
+        dv = {}
         for n in nodes:
-            if n not in nodes_seen:
-                nodes_seen.add(n)
+            dv[n] = {}
+            for dest in nodes:
+                if dest == n:
+                    dv[n][dest] = 0
+                elif dest in dt[n]:
+                    min_cost = INF
+                    min_via = None
+                    for via in sorted(dt[n][dest].keys()):
+                        cost = dt[n][dest][via]
+                        if cost < min_cost or (cost == min_cost and (min_via is None or via < min_via)):
+                            min_cost = cost
+                            min_via = via
+                    dv[n][dest] = min_cost
+        updated = False
+        for x in nodes:
+            for dest in dt[x]:
+                for via in dt[x][dest]:
+                    if via in graph[x]:
+                        cost_to_via = graph[x][via]
+                        cost_via_to_dest = dv[via][dest]
+                        new_cost = cost_to_via + cost_via_to_dest
+                    else:
+                        new_cost = INF
+                    if dt[x][dest][via] != new_cost:
+                        dt[x][dest][via] = new_cost
+                        updated = True
+        if not updated:
+            break
+        print_distance_tables(nodes, dt, t)
+        t += 1
+    print_routing_tables(nodes, dt)
 
-        edges = [e for e in edges if e[0] in nodes_seen and e[1] in nodes_seen]
-        for e in new_edges:
-            edges.append(e)
+def floyd_warshall_update(nodes, graph, t):
+   
+    cost = {u: {v: (0 if u == v else (graph[u][v] if v in graph[u] else INF)) for v in nodes} for u in nodes}
+   
+    for k in nodes:
+        for i in nodes:
+            for j in nodes:
+                if cost[i][j] > cost[i][k] + cost[k][j]:
+                    cost[i][j] = cost[i][k] + cost[k][j]
+   
+    dt = {}
+    for x in nodes:
+        dt[x] = {}
+        for dest in nodes:
+            if dest == x:
+                continue
+            dt[x][dest] = {}
+            for via in nodes:
+                if via != x:
+                    if via in graph[x]:
+                        min_via_cost = INF
+                        if dest in cost[via]:
+                            for w in nodes:
+                                if w != x and w != via and dest != via:
+                                    if w in graph[via]:
+                                        c = graph[via][w] + cost[w][dest]
+                                        if c < min_via_cost:
+                                            min_via_cost = c
+                            if min_via_cost == INF:
+                                min_via_cost = cost[via][dest]
+                        dt[x][dest][via] = graph[x][via] + min_via_cost
+                    else:
+                        dt[x][dest][via] = INF
+    print_distance_tables(nodes, dt, t)
+    print_routing_tables(nodes, dt)
 
-        t = run_dv(sorted(nodes_seen), edges, t)
+def main():
+    nodes, edges, updates = parse_input()
+    t = 0
+    t, dt, graph = run_dv(nodes, edges, t)
 
-        if updates:
-            for u, v, w in updates:
-                edges = [e for e in edges if not ((e[0] == u and e[1] == v) or (e[0] == v and e[1] == u))]
-                if w >= 0:
-                    edges.append((u, v, w))
-                nodes_seen.update([u, v])
+    if updates:
+        for u, v, w in updates:
+            if u in graph and v in graph[u]:
+                del graph[u][v]
+            if v in graph and u in graph[v]:
+                del graph[v][u]
+            
+            edges = [e for e in edges if not ((e[0] == u and e[1] == v) or (e[0] == v and e[1] == u))]
+            if w >= 0:
+                if u not in graph:
+                    graph[u] = {}
+                if v not in graph:
+                    graph[v] = {}
+                graph[u][v] = w
+                graph[v][u] = w
+                edges.append((u, v, w))
+          
+            if u not in nodes:
+                nodes.append(u)
+                graph[u] = {}
+                dt[u] = {}
+                for dest in nodes:
+                    if dest == u:
+                        continue
+                    dt[u][dest] = {via: INF for via in nodes if via != u}
+                for other in nodes:
+                    if other == u:
+                        continue
+                    if u not in dt[other]:
+                        dt[other][u] = {via: INF for via in nodes if via != other}
+            if v not in nodes:
+                nodes.append(v)
+                graph[v] = {}
+                dt[v] = {}
+                for dest in nodes:
+                    if dest == v:
+                        continue
+                    dt[v][dest] = {via: INF for via in nodes if via != v}
+                for other in nodes:
+                    if other == v:
+                        continue
+                    if v not in dt[other]:
+                        dt[other][v] = {via: INF for via in nodes if via != other}
+                      if w >= 0:
+                if v in dt[u]:
+                    dt[u][v][v] = w
+                if u in dt[v]:
+                    dt[v][u][u] = w
+            else:
+                if v in dt[u] and v in dt[u][v]:
+                    dt[u][v][v] = INF
+                if u in dt[v] and u in dt[v][u]:
+                    dt[v][u][u] = INF
 
-            t = run_dv(sorted(nodes_seen), edges, t)
+
+        floyd_warshall_update(nodes, graph, t)
 
 if __name__ == "__main__":
     main()
-
